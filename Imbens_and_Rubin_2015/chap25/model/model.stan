@@ -1,151 +1,150 @@
 functions {
-  real pp_lpmf(array[] int y, vector log_p1, vector p2) {
-    return sum(log_p1) + bernoulli_lpmf(y | p2);
+  real mixture_co_g_lpmf(int y, int g, vector xb_g, real p_1, real p_2) {
+    return log_sum_exp(
+      categorical_logit_lpmf(1 | xb_g) + bernoulli_lpmf(y | p_1),
+      categorical_logit_lpmf(g | xb_g) + bernoulli_lpmf(y | p_2)
+    );
   }
-
-  real mix_pp_lpmf(int y, real log_p1, real p2, real log_q1, real q2) {
-    vector[2] ps;
-    ps[1] = log_p1 + bernoulli_lpmf(y | p2);
-    ps[2] = log_q1 + bernoulli_lpmf(y | q2);
-    return log_sum_exp(ps);
+  
+  int bernoulli_co_rng(int y, int g, vector xb_g, real p_1, real p_2) {
+    vector[2] lp = [
+      categorical_logit_lpmf(1 | xb_g) + bernoulli_lpmf(y | p_1),
+      categorical_logit_lpmf(g | xb_g) + bernoulli_lpmf(y | p_2)]';
+    return bernoulli_rng(softmax(lp)[1]);
   }
 }
 
 data {
-  int<lower=1> N;     // number of observations
-  int<lower=1> N_00;  // number of observations at (0, 0)
-  int<lower=1> N_01;  // number of observations at (0, 1)
-  int<lower=1> N_10;  // number of observations at (1, 0)
-  int<lower=1> N_11;  // number of observations at (1, 1)
-  int K;              // number of covariates
-  array[N_00] int Y_obs_00;  // observed outcome at (0, 0)
-  array[N_01] int Y_obs_01;  // observed outcome at (0, 1)
-  array[N_10] int Y_obs_10;  // observed outcome at (1, 0)
-  array[N_11] int Y_obs_11;  // observed outcome at (1, 1)
-  matrix[N, K] X;        // covariates
-  matrix[N_00, K] X_00;  // covariates at (0, 0)
-  matrix[N_01, K] X_01;  // covariates at (0, 1)
-  matrix[N_10, K] X_10;  // covariates at (1, 0)
-  matrix[N_11, K] X_11;  // covariates at (1, 1)
+  int<lower=1> N;        // number of observations
+  int<lower=1> N_00;     // number of observations for (0, 0)
+  int<lower=1> N_01;     // number of observations for (0, 1)
+  int<lower=1> N_10;     // number of observations for (1, 0)
+  int<lower=1> N_11;     // number of observations for (1, 1)
+  array[N_00] int i_00;  // indices of observations for (0, 0)
+  array[N_01] int i_01;  // indices of observations for (0, 1)
+  array[N_10] int i_10;  // indices of observations for (1, 0)
+  array[N_11] int i_11;  // indices of observations for (1, 1)
+  int D;                 // number of covariates
+  matrix[N, D] X;        // covariates
+  array[N] int Y;        // observed outcome
+  real N_prior;          // weight of prior
 }
 
 parameters {
-  vector[K] beta_co_c;
-  vector[K] beta_co_t;
-  vector[K] beta_nt;
-  vector[K] beta_at;
-  vector[K] gamma_nt;
-  vector[K] gamma_at;
+  vector[2] a_g_raw;
+  matrix[D,2] b_g_raw;
+  real a_co_A0;
+  real a_co_A1;
+  real a_nt;
+  real a_at;
+  vector[D] b_co_A0;
+  vector[D] b_co_A1;
+  vector[D] b_nt;
+  vector[D] b_at;
 }
 
 transformed parameters {
-  matrix[N_00,3] log_p_type_00;  // 1: co, 2:nt, 3:at
-  matrix[N_01,3] log_p_type_01;  // 1: co, 2:nt, 3:at
-  matrix[N_10,3] log_p_type_10;  // 1: co, 2:nt, 3:at
-  matrix[N_11,3] log_p_type_11;  // 1: co, 2:nt, 3:at
-  vector[N_00] p_y_00_nt   = inv_logit(X_00*beta_nt);
-  vector[N_00] p_y_00_co_c = inv_logit(X_00*beta_co_c);
-  vector[N_01] p_y_01_at   = inv_logit(X_01*beta_at);
-  vector[N_10] p_y_10_nt   = inv_logit(X_10*beta_nt);
-  vector[N_11] p_y_11_at   = inv_logit(X_11*beta_at);
-  vector[N_11] p_y_11_co_t = inv_logit(X_11*beta_co_t);
-  {
-    vector[N_00] xg_00_nt = X_00*gamma_nt;
-    vector[N_00] xg_00_at = X_00*gamma_at;
-    vector[N_01] xg_01_nt = X_01*gamma_nt;
-    vector[N_01] xg_01_at = X_01*gamma_at;
-    vector[N_10] xg_10_nt = X_10*gamma_nt;
-    vector[N_10] xg_10_at = X_10*gamma_at;
-    vector[N_11] xg_11_nt = X_11*gamma_nt;
-    vector[N_11] xg_11_at = X_11*gamma_at;
-    for (n in 1:N_00) log_p_type_00[n] = log_softmax([0, xg_00_nt[n], xg_00_at[n]]')';
-    for (n in 1:N_01) log_p_type_01[n] = log_softmax([0, xg_01_nt[n], xg_01_at[n]]')';
-    for (n in 1:N_10) log_p_type_10[n] = log_softmax([0, xg_10_nt[n], xg_10_at[n]]')';
-    for (n in 1:N_11) log_p_type_11[n] = log_softmax([0, xg_11_nt[n], xg_11_at[n]]')';
-  }
+  vector[3] a_g = append_row(0, a_g_raw);   // 1: co, 2: nt, 3: at
+  matrix[D,3] b_g = append_col(rep_vector(0, D), b_g_raw);
 }
 
 model {
-  // prior
-  real prior_at = 2*sum(log_inv_logit(X*beta_at) + log1m_inv_logit(X*beta_at));
-  real prior_nt = 2*sum(log_inv_logit(X*beta_nt) + log1m_inv_logit(X*beta_nt));
-  real prior_co = sum(log_inv_logit(X*beta_co_c) + log1m_inv_logit(X*beta_co_c)
-                    + log_inv_logit(X*beta_co_t) + log1m_inv_logit(X*beta_co_t));
-  real prior_type = sum(log_p_type_00) + sum(log_p_type_01) 
-                  + sum(log_p_type_10) + sum(log_p_type_11);
-  target += 30.0/(12 * N) * (prior_at + prior_nt + prior_co + prior_type);
+  matrix[3,N] Xb_g = rep_matrix(a_g, N) + (X*b_g)';  // NOTE: transpose for softmax
+  vector[N_00] p_co_A0 = inv_logit(a_co_A0 + X[i_00]*b_co_A0);
+  vector[N_00] p_nt    = inv_logit(a_nt    + X[i_00]*b_nt);
+  vector[N_11] p_co_A1 = inv_logit(a_co_A1 + X[i_11]*b_co_A1);
+  vector[N_11] p_at    = inv_logit(a_at    + X[i_11]*b_at);
 
-  // likelihood  
+  // prior
+  real lp_prior = 0;
+  lp_prior += categorical_logit_glm_lpmf(1 | X, a_g, b_g);  // should be 4 times?
+  lp_prior += categorical_logit_glm_lpmf(2 | X, a_g, b_g);  // should be 4 times?
+  lp_prior += categorical_logit_glm_lpmf(3 | X, a_g, b_g);  // should be 4 times?
+  lp_prior += bernoulli_logit_glm_lpmf(1 | X, a_co_A0, b_co_A0);
+  lp_prior += bernoulli_logit_glm_lpmf(0 | X, a_co_A0, b_co_A0);
+  lp_prior += bernoulli_logit_glm_lpmf(1 | X, a_co_A1, b_co_A1);
+  lp_prior += bernoulli_logit_glm_lpmf(0 | X, a_co_A1, b_co_A1);
+  lp_prior += 2*bernoulli_logit_glm_lpmf(1 | X, a_nt, b_nt);
+  lp_prior += 2*bernoulli_logit_glm_lpmf(0 | X, a_nt, b_nt);
+  lp_prior += 2*bernoulli_logit_glm_lpmf(1 | X, a_at, b_at);
+  lp_prior += 2*bernoulli_logit_glm_lpmf(0 | X, a_at, b_at);
+  target += N_prior/(12 * N) * lp_prior;
+  
+  // likelihoood
+  // (0, 0): mixture of co and nt
   for (n in 1:N_00) {
-    Y_obs_00[n] ~ mix_pp(log_p_type_00[n,1], p_y_00_co_c[n], 
-                         log_p_type_00[n,2], p_y_00_nt[n]);
+    Y[i_00[n]] ~ mixture_co_g(2, Xb_g[:,i_00[n]], p_co_A0[n], p_nt[n]);
   }
-  Y_obs_01[1:N_01] ~ pp(log_p_type_01[1:N_01,3], p_y_01_at[1:N_01]);
-  Y_obs_10[1:N_10] ~ pp(log_p_type_10[1:N_10,2], p_y_10_nt[1:N_10]);
+
+  // (0, 1): at
+  rep_array(3, N_01) ~ categorical_logit_glm(X[i_01], a_g, b_g);
+  Y[i_01] ~ bernoulli_logit_glm(X[i_01], a_at, b_at);
+
+  // (1, 0): nt
+  rep_array(2, N_10) ~ categorical_logit_glm(X[i_10], a_g, b_g);
+  Y[i_10] ~ bernoulli_logit_glm(X[i_10], a_nt, b_nt);
+  
+  // (1, 1): mixture of co and at
   for (n in 1:N_11) {
-    Y_obs_11[n] ~ mix_pp(log_p_type_11[n,1], p_y_11_co_t[n], 
-                         log_p_type_11[n,3], p_y_11_at[n]);
+    Y[i_11[n]] ~ mixture_co_g(3, Xb_g[:,i_11[n]], p_co_A1[n], p_at[n]);
   }
 }
 
 generated quantities {
-  vector[N_00] Y_0_00;
-  vector[N_00] Y_1_00;
-  vector[N_11] Y_0_11;
-  vector[N_11] Y_1_11;
-  array[N_00] int Co_00;
-  array[N_11] int Co_11;
-  vector[N_00] p_y_00_co_t = inv_logit(X_00*beta_co_t);
-  vector[N_11] p_y_11_co_c = inv_logit(X_11*beta_co_c);
-  vector[N_00] tau_individual_00;
-  vector[N_11] tau_individual_11;
   int N_co = 0;
-  real sum_tau_co = 0.0;
   real tau_late;
-  
-  for (n in 1:N_00) {
-    vector[2] ps;
-    real p_co;
-    ps[1] = log_p_type_00[n,1] + bernoulli_lpmf(Y_obs_00[n] | p_y_00_co_c[n]);
-    ps[2] = log_p_type_00[n,2] + bernoulli_lpmf(Y_obs_00[n] | p_y_00_nt[n]);
-    p_co = exp(ps[1] - log_sum_exp(ps));
-    Co_00[n] = bernoulli_rng(p_co);
-    Y_0_00[n] = Y_obs_00[n];
-    if (Co_00[n] == 1) {
-      Y_1_00[n] = bernoulli_rng(p_y_00_co_t[n]);
-    } else {
-      Y_1_00[n] = bernoulli_rng(p_y_00_nt[n]);
+  {
+    matrix[3,N] Xb_g = rep_matrix(a_g, N) + (X*b_g)';  // NOTE: transpose for softmax
+    vector[N_00] p_co_A0 = inv_logit(a_co_A0 + X[i_00]*b_co_A0);
+    vector[N_00] p_nt    = inv_logit(a_nt    + X[i_00]*b_nt);
+    vector[N_11] p_co_A1 = inv_logit(a_co_A1 + X[i_11]*b_co_A1);
+    vector[N_11] p_at    = inv_logit(a_at    + X[i_11]*b_at);
+    vector[N_00] p_co_A1_00 = inv_logit(a_co_A1 + X[i_00]*b_co_A1);
+    vector[N_11] p_co_A0_11 = inv_logit(a_co_A0 + X[i_11]*b_co_A0);
+    vector[N_00] Y_0_00;
+    vector[N_00] Y_1_00;
+    vector[N_11] Y_0_11;
+    vector[N_11] Y_1_11;
+    array[N_00] int Co_00;
+    array[N_11] int Co_11;
+    vector[N_00] tau_individual_00;
+    vector[N_11] tau_individual_11;
+    real sum_tau_co = 0.0;
+    
+    for (n in 1:N_00) {
+      Co_00[n] = bernoulli_co_rng(Y[i_00[n]], 2, Xb_g[:,i_00[n]], p_co_A0[n], p_nt[n]);
+      Y_0_00[n] = Y[i_00[n]];
+      if (Co_00[n] == 1) {
+        Y_1_00[n] = bernoulli_rng(p_co_A1_00[n]);
+      } else {
+        Y_1_00[n] = bernoulli_rng(p_nt[n]);
+      }
     }
-  }
-
-  for (n in 1:N_11) {
-    vector[2] ps;
-    real p_co;
-    ps[1] = log_p_type_11[n,1] + bernoulli_lpmf(Y_obs_11[n] | p_y_11_co_t[n]);
-    ps[2] = log_p_type_11[n,3] + bernoulli_lpmf(Y_obs_11[n] | p_y_11_at[n]);
-    p_co = exp(ps[1] - log_sum_exp(ps));
-    Co_11[n] = bernoulli_rng(p_co);
-    if (Co_11[n] == 1) {
-      Y_0_11[n] = bernoulli_rng(p_y_11_co_c[n]);
-    } else {
-      Y_0_11[n] = bernoulli_rng(p_y_11_at[n]);
+    
+    for (n in 1:N_11) {
+      Co_11[n] = bernoulli_co_rng(Y[i_11[n]], 3, Xb_g[:,i_11[n]], p_co_A1[n], p_at[n]);
+      if (Co_11[n] == 1) {
+        Y_0_11[n] = bernoulli_rng(p_co_A0_11[n]);
+      } else {
+        Y_1_00[n] = bernoulli_rng(p_at[n]);
+      }
+      Y_1_11[n] = Y[i_11[n]];
     }
-    Y_1_11[n] = Y_obs_11[n];
-  }
-  tau_individual_00[1:N_00] = Y_1_00[1:N_00] - Y_0_00[1:N_00];
-  tau_individual_11[1:N_11] = Y_1_11[1:N_11] - Y_0_11[1:N_11];
-  
-  for (n in 1:N_00) {
-    if (Co_00[n] == 1) {
-      sum_tau_co += tau_individual_00[n];
-      N_co += 1;
+    tau_individual_00[1:N_00] = Y_1_00[1:N_00] - Y_0_00[1:N_00];
+    tau_individual_11[1:N_11] = Y_1_11[1:N_11] - Y_0_11[1:N_11];
+    
+    for (n in 1:N_00) {
+      if (Co_00[n] == 1) {
+        sum_tau_co += tau_individual_00[n];
+        N_co += 1;
+      }
     }
-  }
-  for (n in 1:N_11) {
-    if (Co_11[n] == 1) {
-      sum_tau_co += tau_individual_11[n];
-      N_co += 1;
+    for (n in 1:N_11) {
+      if (Co_11[n] == 1) {
+        sum_tau_co += tau_individual_11[n];
+        N_co += 1;
+      }
     }
+    tau_late = (N_co != 0 ? sum_tau_co/N_co : -10000);
   }
-  tau_late = (N_co != 0 ? sum_tau_co/N_co : -10000);
 }
